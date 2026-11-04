@@ -1,0 +1,29 @@
+{
+  "name": "tsk2",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/tulika-eng/TaskP2#readme",
+  "bugs": {
+    "url": "https://github.com/tulika-eng/TaskP2/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tulika-eng/TaskP2.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

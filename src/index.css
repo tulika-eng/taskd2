@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #1f1f1f;
+  background: #efefef;
+}
+
+html {
+  background: #efefef;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #efefef;
+}
+
+* {
+  box-sizing: border-box;
+}
