@@ -1,140 +1,174 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect
+} from 'react'
+
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+  onAuthStateChanged
+} from 'firebase/auth'
+
+import {
+  doc,
+  getDoc,
+  setDoc
+} from 'firebase/firestore'
+
+import { auth, db } from '../firebase.js'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem('token') || null)
-  const [user, setUser] = useState(() => {
-    try {
-      const savedUser = localStorage.getItem('user')
-      return savedUser ? JSON.parse(savedUser) : null
-    } catch {
-      return null
-    }
-  })
+  const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Verify and sync active session from backend on app mount
+  // Listen for Firebase authentication changes
   useEffect(() => {
-    const syncSession = async () => {
-      const storedToken = localStorage.getItem('token')
-      if (!storedToken) {
-        setLoading(false)
-        return
-      }
-
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: {
-            Authorization: `Bearer ${storedToken}`,
-          },
-        })
-
-        if (res.ok) {
-          const data = await res.json()
-          if (data.success && data.user) {
-            setUser(data.user)
-            localStorage.setItem('user', JSON.stringify(data.user))
-          }
-        } else {
-          // Token expired or invalid
-          logout()
+        if (!firebaseUser) {
+          setUser(null)
+          setLoading(false)
+          return
         }
-      } catch (err) {
-        console.warn('Could not sync user session from backend:', err)
+
+        // Get the user's Firestore profile
+        const userRef = doc(db, 'users', firebaseUser.uid)
+        const userSnap = await getDoc(userRef)
+
+        let profile
+
+        if (userSnap.exists()) {
+          profile = userSnap.data()
+        } else {
+          // Create a profile if one does not exist
+          profile = {
+            name: firebaseUser.displayName || '',
+            email: firebaseUser.email || '',
+            plan: 'Free',
+            createdAt: new Date().toISOString()
+          }
+
+          await setDoc(userRef, profile)
+        }
+
+        setUser({
+          uid: firebaseUser.uid,
+          id: firebaseUser.uid,
+          name: profile.name || firebaseUser.displayName || '',
+          email: firebaseUser.email || '',
+          plan: profile.plan || 'Free'
+        })
+      } catch (error) {
+        console.error('Error loading user profile:', error)
+        setUser(null)
       } finally {
         setLoading(false)
       }
-    }
+    })
 
-    syncSession()
+    return unsubscribe
   }, [])
 
-  // 1. Register with backend
+  // Register using Firebase Authentication
   const register = async (name, email, password) => {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
+    const credential = await createUserWithEmailAndPassword(
+      auth,
+      email.trim(),
+      password
+    )
+
+    await updateProfile(credential.user, {
+      displayName: name.trim()
     })
 
-    const data = await res.json()
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Registration failed.')
+    const profile = {
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      plan: 'Free',
+      createdAt: new Date().toISOString()
     }
 
-    // Save JWT in localStorage
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify(data.user))
-    setToken(data.token)
-    setUser(data.user)
-    return data.user
+    await setDoc(
+      doc(db, 'users', credential.user.uid),
+      profile
+    )
+
+    return {
+      uid: credential.user.uid,
+      id: credential.user.uid,
+      ...profile
+    }
   }
 
-  // 2. Login with backend
+  // Login using Firebase Authentication
   const login = async (email, password) => {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    })
+    const credential = await signInWithEmailAndPassword(
+      auth,
+      email.trim(),
+      password
+    )
 
-    const data = await res.json()
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Login failed.')
-    }
-
-    // Save JWT in localStorage
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify(data.user))
-    setToken(data.token)
-    setUser(data.user)
-    return data.user
+    return credential.user
   }
 
-  // 3. Logout
-  const logout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    setToken(null)
-    setUser(null)
+  // Logout using Firebase Authentication
+  const logout = async () => {
+    await signOut(auth)
   }
 
-  // 4. Upgrade Plan
+  // Upgrade plan using Firebase ID token
+  // Backend verification must be updated to Firebase Admin SDK
   const upgradePlan = async (paymentDetails) => {
-    if (!token) {
+    const firebaseUser = auth.currentUser
+
+    if (!firebaseUser) {
       throw new Error('You must be logged in to upgrade your plan.')
     }
 
-    const res = await fetch('/api/upgrade-plan', {
+    const idToken = await firebaseUser.getIdToken()
+
+    const response = await fetch('/api/upgrade-plan', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${idToken}`
       },
-      body: JSON.stringify(paymentDetails),
+      body: JSON.stringify(paymentDetails)
     })
 
-    const data = await res.json()
-    if (!res.ok || !data.success) {
+    const data = await response.json()
+
+    if (!response.ok || !data.success) {
       throw new Error(data.message || 'Payment validation failed.')
     }
 
-    if (data.token) {
-      localStorage.setItem('token', data.token)
-      setToken(data.token)
-    }
+    // Refresh the Firestore user profile
+    const userRef = doc(db, 'users', firebaseUser.uid)
+    const userSnap = await getDoc(userRef)
 
-    if (data.user) {
-      localStorage.setItem('user', JSON.stringify(data.user))
-      setUser(data.user)
+    if (userSnap.exists()) {
+      const profile = userSnap.data()
+
+      setUser({
+        uid: firebaseUser.uid,
+        id: firebaseUser.uid,
+        name: profile.name || firebaseUser.displayName || '',
+        email: firebaseUser.email || '',
+        plan: profile.plan || 'Free'
+      })
     }
 
     return data
   }
 
   const value = {
-    token,
     user,
     loading,
     isLoggedIn: !!user,
@@ -142,16 +176,22 @@ export function AuthProvider({ children }) {
     login,
     register,
     logout,
-    upgradePlan,
+    upgradePlan
   }
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth() {
   const context = useContext(AuthContext)
+
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider')
   }
+
   return context
 }
