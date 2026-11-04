@@ -3,27 +3,37 @@ require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
 const sgMail = require('@sendgrid/mail')
-const admin = require('firebase-admin')
+const {
+  initializeApp,
+  cert,
+  getApps
+} = require('firebase-admin/app')
+
+const { getAuth } = require('firebase-admin/auth')
+const { getFirestore } = require('firebase-admin/firestore')
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
 // Configure Firebase Admin with a service-account JSON stored in Render.
 // Never commit this service-account JSON or put it in frontend code.
-if (!admin.apps.length) {
+if (!getApps().length) {
   if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
     throw new Error('Missing FIREBASE_SERVICE_ACCOUNT environment variable.')
   }
 
-  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId: 'devdeakin-f152d',
+  const serviceAccount = JSON.parse(
+    process.env.FIREBASE_SERVICE_ACCOUNT
+  )
+
+  initializeApp({
+    credential: cert(serviceAccount),
+    projectId: 'devdeakin-f152d'
   })
 }
 
-const db = admin.firestore()
-const firebaseAuth = admin.auth()
+const db = getFirestore()
+const firebaseAuth = getAuth()
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY)
