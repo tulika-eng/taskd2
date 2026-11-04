@@ -1,61 +1,57 @@
-
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect
-} from 'react'
-
+import { createContext, useContext, useEffect, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
-  onAuthStateChanged
+  onIdTokenChanged,
 } from 'firebase/auth'
-
-import {
-  doc,
-  getDoc,
-  setDoc
-} from 'firebase/firestore'
-
+import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase.js'
 
 const AuthContext = createContext(null)
 
+async function readJsonResponse(response) {
+  const text = await response.text()
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch {
+    throw new Error(`The server returned a non-JSON response (HTTP ${response.status}). Check the Render API redirect and deployment.`)
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
+  const [token, setToken] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Listen for Firebase authentication changes
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
       try {
         if (!firebaseUser) {
           setUser(null)
-          setLoading(false)
+          setToken(null)
           return
         }
 
-        // Get the user's Firestore profile
-        const userRef = doc(db, 'users', firebaseUser.uid)
-        const userSnap = await getDoc(userRef)
+        const idToken = await firebaseUser.getIdToken()
+        setToken(idToken)
 
+        const userRef = doc(db, 'users', firebaseUser.uid)
+        const snapshot = await getDoc(userRef)
         let profile
 
-        if (userSnap.exists()) {
-          profile = userSnap.data()
+        if (snapshot.exists()) {
+          profile = snapshot.data()
         } else {
-          // Create a profile if one does not exist
           profile = {
+            uid: firebaseUser.uid,
             name: firebaseUser.displayName || '',
             email: firebaseUser.email || '',
             plan: 'Free',
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
           }
-
-          await setDoc(userRef, profile)
+          await setDoc(userRef, profile, { merge: true })
         }
 
         setUser({
@@ -63,11 +59,12 @@ export function AuthProvider({ children }) {
           id: firebaseUser.uid,
           name: profile.name || firebaseUser.displayName || '',
           email: firebaseUser.email || '',
-          plan: profile.plan || 'Free'
+          plan: profile.plan || 'Free',
         })
       } catch (error) {
-        console.error('Error loading user profile:', error)
+        console.error('Firebase session/profile error:', error)
         setUser(null)
+        setToken(null)
       } finally {
         setLoading(false)
       }
@@ -76,122 +73,88 @@ export function AuthProvider({ children }) {
     return unsubscribe
   }, [])
 
-  // Register using Firebase Authentication
   const register = async (name, email, password) => {
-    const credential = await createUserWithEmailAndPassword(
-      auth,
-      email.trim(),
-      password
-    )
+    const cleanName = name.trim()
+    const cleanEmail = email.trim().toLowerCase()
 
-    await updateProfile(credential.user, {
-      displayName: name.trim()
-    })
+    const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password)
+    await updateProfile(credential.user, { displayName: cleanName })
 
     const profile = {
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      plan: 'Free',
-      createdAt: new Date().toISOString()
-    }
-
-    await setDoc(
-      doc(db, 'users', credential.user.uid),
-      profile
-    )
-
-    return {
       uid: credential.user.uid,
-      id: credential.user.uid,
-      ...profile
+      name: cleanName,
+      email: cleanEmail,
+      plan: 'Free',
+      createdAt: new Date().toISOString(),
     }
+
+    await setDoc(doc(db, 'users', credential.user.uid), profile, { merge: true })
+    return { ...profile, id: credential.user.uid }
   }
 
-  // Login using Firebase Authentication
   const login = async (email, password) => {
     const credential = await signInWithEmailAndPassword(
       auth,
-      email.trim(),
+      email.trim().toLowerCase(),
       password
     )
-
     return credential.user
   }
 
-  // Logout using Firebase Authentication
   const logout = async () => {
     await signOut(auth)
   }
 
-  // Upgrade plan using Firebase ID token
-  // Backend verification must be updated to Firebase Admin SDK
   const upgradePlan = async (paymentDetails) => {
     const firebaseUser = auth.currentUser
+    if (!firebaseUser) throw new Error('You must be logged in to upgrade your plan.')
 
-    if (!firebaseUser) {
-      throw new Error('You must be logged in to upgrade your plan.')
-    }
-
-    const idToken = await firebaseUser.getIdToken()
-
+    const idToken = await firebaseUser.getIdToken(true)
     const response = await fetch('/api/upgrade-plan', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${idToken}`
+        Authorization: `Bearer ${idToken}`,
       },
-      body: JSON.stringify(paymentDetails)
+      body: JSON.stringify(paymentDetails),
     })
-
-    const data = await response.json()
+    const data = await readJsonResponse(response)
 
     if (!response.ok || !data.success) {
       throw new Error(data.message || 'Payment validation failed.')
     }
 
-    // Refresh the Firestore user profile
-    const userRef = doc(db, 'users', firebaseUser.uid)
-    const userSnap = await getDoc(userRef)
+    const profileSnapshot = await getDoc(doc(db, 'users', firebaseUser.uid))
+    const profile = profileSnapshot.exists() ? profileSnapshot.data() : {}
 
-    if (userSnap.exists()) {
-      const profile = userSnap.data()
-
-      setUser({
-        uid: firebaseUser.uid,
-        id: firebaseUser.uid,
-        name: profile.name || firebaseUser.displayName || '',
-        email: firebaseUser.email || '',
-        plan: profile.plan || 'Free'
-      })
-    }
+    setUser({
+      uid: firebaseUser.uid,
+      id: firebaseUser.uid,
+      name: profile.name || firebaseUser.displayName || '',
+      email: firebaseUser.email || '',
+      plan: profile.plan || 'Paid',
+    })
 
     return data
   }
 
   const value = {
     user,
+    token,
     loading,
     isLoggedIn: !!user,
     isPaid: user?.plan === 'Paid',
     login,
     register,
     logout,
-    upgradePlan
+    upgradePlan,
   }
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  )
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {
   const context = useContext(AuthContext)
-
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider')
-  }
-
+  if (!context) throw new Error('useAuth must be used within an AuthProvider')
   return context
 }

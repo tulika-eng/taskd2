@@ -154,7 +154,13 @@ function PostPage() {
         body: JSON.stringify(payload),
       })
 
-      const data = await res.json()
+      const responseText = await res.text()
+      let data
+      try {
+        data = responseText ? JSON.parse(responseText) : {}
+      } catch {
+        throw new Error(`Server returned HTML or invalid JSON (HTTP ${res.status}). Check the Netlify redirect and Render API.`)
+      }
 
       if (!res.ok || !data.success) {
         throw new Error(data.message || 'Failed to create post.')
